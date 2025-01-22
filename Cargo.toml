@@ -1,0 +1,16 @@
+[package]
+name = "embedded-recruitment-task"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+log = "0.4.2"
+prost = "0.13.4"
+prost-types = "0.13.4"
+
+[build-dependencies]
+prost-build = "0.13.4"
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
