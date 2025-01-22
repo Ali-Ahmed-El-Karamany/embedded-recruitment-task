@@ -1,4 +1,4 @@
-use crate::message::EchoMessage;
+use crate::message::{ClientMessage, ServerMessage, AddResponse, client_message, server_message};
 use log::{error, info, warn};
 use prost::Message;
 use std::{
@@ -21,7 +21,9 @@ impl Client {
         Client { stream }
     }
 
+    // Handles incoming client messages and send appropriate response
     pub fn handle(&mut self) -> io::Result<()> {
+
         let mut buffer = [0; 512];
         // Read data from the client
         let bytes_read = self.stream.read(&mut buffer)?;
@@ -30,16 +32,39 @@ impl Client {
             return Ok(());
         }
 
-        if let Ok(message) = EchoMessage::decode(&buffer[..bytes_read]) {
-            info!("Received: {}", message.content);
-            // Echo back the message
-            let payload = message.encode_to_vec();
-            self.stream.write_all(&payload)?;
-            self.stream.flush()?;
-        } else {
-            error!("Failed to decode message");
-        }
+        // Decode the client message check if it is EchoMessage or AddRequest
+        if let Ok(client_message) = ClientMessage::decode(&buffer[..bytes_read]) {
+            match client_message.message {
+                // Handles the Echo message
+                Some(client_message::Message::EchoMessage(echo)) => {
+                    info!("Received EchoMessage: {}", echo.content);
+                    
+                    // Creates and send Echo response
+                    let response = ServerMessage {
+                        message: Some(server_message::Message::EchoMessage(echo)),
+                    };
+                    self.stream.write_all(&response.encode_to_vec())?;
+                }
 
+                // Handles the Add Request 
+                Some(client_message::Message::AddRequest(add)) => {
+                    info!("Received add request of {} + {}", add.a, add.b);    
+                    let result = add.a + add.b;
+                    
+                    // Create and send addition response 
+                    let response = ServerMessage {
+                        message: Some(server_message::Message::AddResponse(AddResponse {
+                            result,
+                        })),
+                    };
+                    self.stream.write_all(&response.encode_to_vec())?;
+                }
+                None => {
+                    error!("Received message with no content");
+                }
+            }
+            self.stream.flush()?;
+        }
         Ok(())
     }
 }
