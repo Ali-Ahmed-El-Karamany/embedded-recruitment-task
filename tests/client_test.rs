@@ -225,7 +225,7 @@ fn test_multiple_clients() {
 }
 
 #[test]
-#[ignore = "please remove ignore and fix this test"]
+//#[ignore = "please remove ignore and fix this test"]
 fn test_client_add_request() {
     // Set up the server in a separate thread
     let server = create_server();
