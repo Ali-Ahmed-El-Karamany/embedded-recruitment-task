@@ -7,8 +7,9 @@ use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
+        Mutex,
     },
-    thread,
+    thread::{self, JoinHandle},
     time::Duration,
 };
 
@@ -69,50 +70,81 @@ impl Client {
     }
 }
 
+// Main server structure, that manges the client connections and server lifecycle
 pub struct Server {
     listener: TcpListener,
     is_running: Arc<AtomicBool>,
+    client_threads: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
-// Main server structure, that manges the client connections and server lifecycle
 impl Server {
-    /// Creates a new server instance
+    // creates a server and bind it with a specific address
     pub fn new(addr: &str) -> io::Result<Self> {
         let listener = TcpListener::bind(addr)?;
         let is_running = Arc::new(AtomicBool::new(false));
+        let client_threads = Arc::new(Mutex::new(Vec::new()));
         Ok(Server {
             listener,
             is_running,
+            client_threads,
         })
     }
 
-    /// Runs the server, listening for incoming connections and handling them
+    // Adds a new client thread handle to the managed threads vector
+    fn add_client_thread(&self, handle: JoinHandle<()>) {
+        if let Ok(mut threads) = self.client_threads.lock() {
+            threads.push(handle);
+        }
+        else {
+            error!("failed to store the handle of client thread");
+        }
+    }
+
+    // Remove completed client threads from the threads vector
+    fn finished_threads_cleanup(&self)
+    {
+        if let Ok(mut threads) = self.client_threads.lock() {
+            threads.retain(|threads| !threads.is_finished());
+        }
+    }
+
     pub fn run(&self) -> io::Result<()> {
-        self.is_running.store(true, Ordering::SeqCst); // Set the server as running
+        self.is_running.store(true, Ordering::SeqCst);
         info!("Server is running on {}", self.listener.local_addr()?);
 
-        // Set the listener to non-blocking mode
+        // Set listener nonblocking mode to true to:
+        // 1- Allow checking of is_running flag
+        // 2- Prevent the the thread from blocking when no clients are connected
         self.listener.set_nonblocking(true)?;
 
         while self.is_running.load(Ordering::SeqCst) {
+            // cleanup completed threads
+            self.finished_threads_cleanup();
+
             match self.listener.accept() {
                 Ok((stream, addr)) => {
                     info!("New client connected: {}", addr);
 
                     // Set the client stream to blocking mode to ensure we read complete messages from the client
                     stream.set_nonblocking(false)?;
+ 
+                    let is_running = Arc::clone(&self.is_running);
 
-                    // Handle the client request
-                    let mut client = Client::new(stream);
-                    while self.is_running.load(Ordering::SeqCst) {
-                        if let Err(e) = client.handle() {
-                            error!("Error handling client: {}", e);
-                            break;
+                    // Spwan new thread for client handling    
+                    let handle = thread::spawn(move || {
+                        let mut client = Client::new(stream);
+                        while is_running.load(Ordering::SeqCst) {
+                            if let Err(e) = client.handle() {
+                                error!("Error handling client: {}", e);
+                                break;
+                            }
                         }
-                    }
+                    });
+
+                    // Add the thread handle to the vector
+                    self.add_client_thread(handle);
                 }
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                    // No incoming connections, sleep briefly to reduce CPU usage
                     thread::sleep(Duration::from_millis(100));
                 }
                 Err(e) => {
@@ -125,10 +157,23 @@ impl Server {
         Ok(())
     }
 
-    /// Stops the server by setting the `is_running` flag to `false`
+    // Gracefully stops the server and all client handlers
+    // 1. Sets running flag to false
+    // 2. Waits for all client threads to complete
     pub fn stop(&self) {
         if self.is_running.load(Ordering::SeqCst) {
+            // stop the server from accepting new clients
             self.is_running.store(false, Ordering::SeqCst);
+            
+            // Join all client threads
+            if let Ok(mut threads) = self.client_threads.lock() {
+                for thread in threads.drain(..) {
+                    if let Err(e) = thread.join() {
+                        error!("Error joining client thread: {:?}", e);
+                    }
+                }
+            }
+
             info!("Shutdown signal sent.");
         } else {
             warn!("Server was already stopped or not running.");
