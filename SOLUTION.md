@@ -1,4 +1,4 @@
-# **Embedded Recruitment Task** Solution
+# **Embedded Task** Solution
 
 ## **Overview**
 
