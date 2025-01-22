@@ -74,6 +74,7 @@ pub struct Server {
     is_running: Arc<AtomicBool>,
 }
 
+// Main server structure, that manges the client connections and server lifecycle
 impl Server {
     /// Creates a new server instance
     pub fn new(addr: &str) -> io::Result<Self> {
@@ -97,6 +98,9 @@ impl Server {
             match self.listener.accept() {
                 Ok((stream, addr)) => {
                     info!("New client connected: {}", addr);
+
+                    // Set the client stream to blocking mode to ensure we read complete messages from the client
+                    stream.set_nonblocking(false)?;
 
                     // Handle the client request
                     let mut client = Client::new(stream);
